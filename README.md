@@ -22,14 +22,16 @@ You need the "Ansible Automation Platform 2.6 Containerized Setup Bundle" for an
 
 I typically allocate a disk with 200GB due to containers and bundled installs in the mix, the extracted containers take up more space. All of these numbers can be increased if you so desire, and you could leave some space unused on a larger drive if you are concerned about changing partition sizes later. Since STIGs forbids the installation of applications in /home directories, you will need to install AAP in the /opt directory, and that is why / is the largest. If you are concerned and have more storage available, make things bigger:
 
-/boot.             1GB
-/boot/efi.        1GB
-/                 120GB
-/home.         10GB per user
-/tmp             20GB
-/var/tmp       20GB
+```
+/boot.           1GB
+/boot/efi        1GB
+/              120GB
+/home           10GB per user
+/tmp            20GB
+/var/tmp        20GB
 /var/log        10GB
-/var/log/audit 5GB
+/var/log/audit   5GB
+```
 
 Partitions are set up during installation of RHEL.
 
