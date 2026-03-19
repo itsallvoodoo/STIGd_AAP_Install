@@ -1,7 +1,7 @@
 # STIGd_AAP_Install
 Instructions for how to install AAP 2.6 on RHEL 9 that has been STIG'd.
 
-Below is my standard guide to doing Containerized AAP 2.6 installs on RHEL 9. 
+Below is my standard guide to doing Containerized AAP 2.6 installs on RHEL 9. This is provided with no warranty expressed or implied, these are just instructions found to work for hardened environments.
 
 ## Pre-Reading
 
