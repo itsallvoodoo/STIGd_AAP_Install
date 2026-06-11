@@ -88,6 +88,20 @@ Fix this with the following:
 sudo sysctl user.max_user_namespaces=15000
 ```
 
+The above will make the change initially. To have this setting persist, run the following command:
+
+```
+echo "user.max_user_namespaces=15000" | sudo tee /etc/sysctl.d/99-user-namespaces.conf
+```
+
+Note: 15000 is a relatively arbitrary number. After installation and steady state running in production, you can tune this number down to something more reasonable. To find out how many namespaces are in use, you can run the following command as the user that Ansible Automation Platform is running under:
+
+```
+sudo lsns -t user | wc -l
+```
+
+Be sure to give yourself plenty of head room, perhaps double the number shown by that command to accommodate Execution Environments running and multiple users on the system.
+
 ## Installation Location
 
 IF you are installing in a location other than /home (and you should be to adhere to STIGs), we have to change some hardcoded paths within the installer so it knows to place things. The standard path is /home/<username>, but STIGs do not allow for executable binaries in /home. Follow the instructions in this solution, which uses /opt as an installation location with a username of ansible. If you are using another dedicated user for the installation, use that instead:
