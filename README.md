@@ -1,22 +1,27 @@
 # STIGd_AAP_Install
-Instructions for how to install AAP 2.6 on RHEL 9 that has been STIG'd.
+Instructions for how to install Ansible Automation Platform Containerized 2.6 or 2.7 on RHEL 9 or 10 that has been STIG'd.
 
-Below is my standard guide to doing Containerized AAP 2.6 installs on RHEL 9. This is provided with no warranty expressed or implied, these are just instructions found to work for hardened environments.
+Below is my standard guide to doing Containerized AAP 2.6/2.7 installs on RHEL 9/10. This is provided with no warranty expressed or implied, these are just instructions found to usually work for hardened environments.
 
 ## Pre-Reading
 
 Here is a link to the hardening guide for Ansible Automation Platform 2.6:
-https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/pdf/hardening_and_compliance/Red_Hat_Ansible_Automation_Platform-2.6-Hardening_and_compliance-en-US.pdf
+https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/secure-assembly_hardening_aap
+
+And the same guide for AAP 2.7:
+https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.7/secure-assembly_hardening_aap
 
 ## Binaries
 
 RHEL ISOs are located here: https://access.redhat.com/downloads/content/rhel
 
-If you are doing a disconnected install, you need to get the "Red Hat Enterprise Linux 9.6 Binary DVD" for this, if you are connected to the internet or a Satellite server, then you can get the "Red Hat Enterprise Linux 9.6 Boot ISO"
+If you are doing a disconnected install, you need to get the "Red Hat Enterprise Linux 9.x Binary DVD" (or 10.x) for this, if you are connected to the internet or a Satellite server, then you can get the "Red Hat Enterprise Linux 9.x Boot ISO" (or 10.x)
 
-The AAP binaries are available here: https://access.redhat.com/downloads/content/480/ver=2.6/rhel---10/2.6/x86_64/product-software
+The AAP 2.6 binaries are available here: https://access.redhat.com/downloads/content/480/ver=2.6/rhel---9/2.6/x86_64/product-software
 
-You need the "Ansible Automation Platform 2.6 Containerized Setup Bundle" for an offline install, otherwise you can use the smaller "Ansible Automation Platform 2.6 Containerized Setup"
+If you need a different combination, change the selector accordingly (2.6/2.7 or RHEL 9/10).
+
+You need the "Ansible Automation Platform 2.x Containerized Setup Bundle" for an offline install, otherwise you can use the smaller "Ansible Automation Platform 2.x Containerized Setup"
 
 ## Partitions
 
@@ -32,6 +37,7 @@ I typically allocate a disk with 200GB due to containers and bundled installs in
 /var/log/audit   5GB
 /home           10GB per user
 swap             8GB
+/opt            60GB 
 /          Remaining
 ```
 
@@ -39,12 +45,11 @@ Partitions are set up during installation of RHEL.
 
 ## FAPolicy
 
-Also during installation, you select the security profile and select the DISA STIG for RHEL profile. This will enforce a lot of the security requirements needed to be compliant. We must configure fapolicy rules (File Access Policy) to allow Ansible to run.
+Also during installation, you select the security profile and select the DISA STIG for RHEL profile. This will enforce a lot of the security requirements needed to be compliant. For RHEL 10, this option is no longer available during boot. You will have to apply DISA STIG policies after initial boot. Either way, we must configure fapolicy rules (File Access Policy) to allow Ansible to run.
 
 The rules file needs to be 15-custom.rules inside the /etc/fapolicyd/rules.d/ folder, and includes the following. Copy and paste the below into your "15-custom.rules" file created.
 
 ```
-%languages=application/x-bytecode.ocaml,application/x-bytecode.python,application/java-archive,text/x-java,application/x-java-applet,application/javascript,text/javascript,text/x-awk,text/x-gawk,text/x-lisp,application/x-elc,text/x-lua,text/x-m4,text/x-nftables,text/x-perl,text/x-php,text/x-python,text/x-R,text/x-ruby,text/x-script.guile,text/x-tcl,text/x-luatex,text/x-systemtap
 allow perm=execute uid=<ANSIBLE_USER> : dir=/opt/.ansible
 allow perm=open uid=<ANSIBLE_USER> : dir=/opt/.ansible
 allow perm=any uid=0 : dir=/var/tmp/
@@ -158,7 +163,7 @@ echo "export XDG_DATA_HOME=/opt/ansible/.local/share" >> ~/.bashrc
 
 Note: the above commands should be executed on all the AAP nodes.
 
-### Fix intaller path locations
+### Fix installer path locations
 
 Use the customized path variable to replace the default path variable in the installation path.
 
@@ -190,9 +195,28 @@ ansible_config_dir=/opt/ansible
 ansible_local_dir=/opt/ansible
 ```
 
+### Modify ansible.cfg
+
+When Ansible runs normal playbooks and tasks, it deploys a small amount of python code on the end server, which then executes the necessary commands. Since this is compiled essentially at runtime, it cannot be trusted before installation and cannot be baked into FAPolicy. Therefore, we must take advantage of an Ansible feature called pipelining, which will stream the commands via stdin instead of using binaries. Customized the ansible.cfg file in your installer folder with the following settings:
+
+```
+[defaults]
+collections_on_ansible_version_mismatch = ignore
+collections_path = ./collections
+inventory = ./inventory
+log_path = ./aap_install.log
+remote_tmp = /opt/ansible/tmp
+local_tmp = /opt/ansible/tmp
+allow_world_readable_tmp = True
+
+[connection]
+pipelining = True
+```
+
+
 ### Install
 
-Install AAP 2.6 Containerized
+Install AAP 2.x Containerized
 
 ```
 ansible-playbook  -i inventory ansible.containerized_installer.install
