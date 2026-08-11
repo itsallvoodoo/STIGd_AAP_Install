@@ -1,5 +1,5 @@
 # STIGd_AAP_Install
-Instructions for how to install Ansible Automation Platform Containerized 2.6 or 2.7 on RHEL 9 or 10 that has been STIG'd.
+Instructions for how to install Ansible Automation Platform Containerized 2.6/2.7 on RHEL 9/10 that has been STIG'd.
 
 Below is my standard guide to doing Containerized AAP 2.6/2.7 installs on RHEL 9/10. This is provided with no warranty expressed or implied, these are just instructions found to usually work for hardened environments.
 
@@ -19,13 +19,13 @@ If you are doing a disconnected install, you need to get the "Red Hat Enterprise
 
 The AAP 2.6 binaries are available here: https://access.redhat.com/downloads/content/480/ver=2.6/rhel---9/2.6/x86_64/product-software
 
-If you need a different combination, change the selector accordingly (2.6/2.7 or RHEL 9/10).
+If you need a different combination, change the selector accordingly (2.6/2.7 and/or RHEL 9/10).
 
 You need the "Ansible Automation Platform 2.x Containerized Setup Bundle" for an offline install, otherwise you can use the smaller "Ansible Automation Platform 2.x Containerized Setup"
 
 ## Partitions
 
-I typically allocate a disk with 200GB due to containers and bundled installs in the mix, the extracted containers take up more space. All of these numbers can be increased if you so desire, and you could leave some space unused on a larger drive if you are concerned about changing partition sizes later. Since STIGs forbids the installation of applications in /home directories, you will need to install AAP in the /opt directory, and that is why / is the largest. If you are concerned and have more storage available, make things bigger:
+I typically allocate a disk with 200GB due to containers and bundled installs in the mix, the extracted containers take up more space. All of these numbers can be increased if you so desire, and you could leave some space unused on a larger drive if you are concerned about changing partition sizes later. Since STIGs forbid the installation of applications in /home directories, you will need to install AAP in the /opt directory. A fresh baseline install of AAP uses ~23GB of space, so if you are concerned and have more storage available, make things bigger:
 
 ```
 /boot            1GB
@@ -45,7 +45,7 @@ Partitions are set up during installation of RHEL.
 
 ## FAPolicy
 
-Also during installation, you select the security profile and select the DISA STIG for RHEL profile. This will enforce a lot of the security requirements needed to be compliant. For RHEL 10, this option is no longer available during boot. You will have to apply DISA STIG policies after initial boot. Either way, we must configure fapolicy rules (File Access Policy) to allow Ansible to run.
+STIGs should always be applied as early as possible and before AAP is installed. During installation of RHEL 9, you select the security profile and select the DISA STIG for RHEL profile.  For RHEL 10, this option is no longer available during boot. You will have to apply DISA STIG policies after initial boot. Either way, we must configure fapolicy rules (File Access Policy) to allow Ansible to run.
 
 The rules file needs to be 15-custom.rules inside the /etc/fapolicyd/rules.d/ folder, and includes the following. Copy and paste the below into your "15-custom.rules" file created.
 
@@ -73,7 +73,7 @@ Be sure to change where it says \<ANSIBLE_USER\> . That needs to be set to the u
 [~]$ id alex
 ```
 uid=1000(alex) gid=1000(alex) groups=1000(alex),10(wheel)
-1000 is the uid in this example.
+1000 is the uid in this example, but on most new systems the ansible user will be 1001.
 
 Also change the \<PYTHONBINARYVERSION\> to be whichever python executable you have installed. This can sometimes be /usr/bin/python3, but is usually just /usr/bin/python .
 
@@ -119,7 +119,7 @@ https://access.redhat.com/solutions/7117294
 
 Finally, the actual instructions for installation are located here: https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/html/containerized_installation/aap-containerized-installation#installing-containerized-aap 
 
-Here are the steps contained in thsoe instructions:
+Here are the steps contained in those instructions:
 
 ### Folders
 
@@ -216,7 +216,25 @@ pipelining = True
 
 ### Install
 
-Install AAP 2.x Containerized
+Ensure the hostname is set
+
+```
+hostname -f
+```
+
+Ensure that Ansible Core is installed
+
+```
+sudo dnf install -y ansible-core
+```
+
+Optionally install some troubleshooting repositories
+
+```
+sudo dnf install -y wget git-core rsync vim
+```
+
+Install AAP 2.x Containerized from /opt/ansible/unbundled-installer-directory/
 
 ```
 ansible-playbook  -i inventory ansible.containerized_installer.install
