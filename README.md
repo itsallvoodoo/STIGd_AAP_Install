@@ -97,18 +97,19 @@ Be sure to give yourself plenty of head room, perhaps double the number shown by
 
 ## Other STIG settings that affect the install
 
-- **Audit backlog (can crash the host).** The STIG sets `audit_backlog_limit=8192` together with `-f 2`, which panics the kernel when an audit record can't be queued. Rootless Podman unpacking and starting the AAP containers can overflow 8192. In testing, it panicked the kernel during the install. Container startup at boot also queued more than 8192 records. Raise the limit in both places, keep `-f 2`, and reboot (the audit rules are immutable until reboot). The STIG's SCAP rule still passes with 65536:
+- **Audit backlog (can crash the host).** The STIG sets `audit_backlog_limit=8192` together with `-f 2`, which panics the kernel when an audit record is lost. Rootless Podman unpacking and starting the AAP containers generates audit records faster than auditd writes them. In testing, 8192 panicked the kernel during the install. Raise the limit in both places, keep `-f 2`, and reboot (the audit rules are immutable until reboot). The STIG's SCAP rule still passes with 65536:
   ```
   sudo grubby --update-kernel=ALL --args=audit_backlog_limit=65536
   sudo sed -i 's/^\s*-b\s\+8192/-b 65536/' /etc/audit/rules.d/audit.rules
   ```
+  With 65536, no audit records were lost in any of our installs. But the queue came within 1% of the limit while images were loading and at boot, and with 131072 it filled completely. A full queue makes processes wait rather than drop records, but a record that can't wait would still be lost and panic the host. Keep AIDE scans and other audit-heavy work out of the install window, and discuss the install-window risk with your ISSM.
 - **AIDE.** The STIG schedules a daily AIDE scan. Scanning rootless container storage adds audit load and reports constant changes. Exclude the container storage and the AAP data directory in `/etc/aide.conf` (use the real paths, which are under /opt/ansible with this layout), then re-initialize the AIDE database after the install.
 - **umask.** The STIG sets 0077. Red Hat's 2.7 docs require 0022 or 0002 for the install; with 077 the controller task container can fail to start. Run the installer from a shell with `umask 0022`.
 - **sudo.** The STIG deletes NOPASSWD sudo rules entirely. Give the install user password-based sudo (for example membership in `wheel`) before hardening, and supply the become password to the installer.
 
 ## Installation Location
 
-IF you are installing in a location other than /home (and you should be to adhere to STIGs), we have to change some hardcoded paths within the installer so it knows to place things. The standard path is /home/<username>, but the STIG requires /home to be mounted noexec (V-257852), so nothing under /home can be executed. Follow the instructions in this solution, which uses /opt as an installation location with a username of ansible. If you are using another dedicated user for the installation, use that instead:
+IF you are installing in a location other than /home (and you should be to adhere to STIGs), we have to change some hardcoded paths within the installer so it knows to place things. The standard path is /home/<username>, but the STIG requires /home to be mounted noexec (V-257852), so nothing under /home can be executed. That breaks a default install: the installer bind-mounts `~/aap/controller/etc/launch_awx_task.sh` into the controller containers as their entrypoint, and on a noexec /home the controller task container fails to start (`/usr/bin/launch_awx_task.sh: Permission denied`). It does the same with `~/aap/containers/podman`, which receptor uses to launch job containers. Follow the instructions in this solution, which uses /opt as an installation location with a username of ansible. If you are using another dedicated user for the installation, use that instead:
 
 https://access.redhat.com/solutions/7117294 
 
@@ -181,6 +182,8 @@ find ansible_collections -type f -name "*.yml" -exec sed -i 's#{{ ansible_local_
 find ansible_collections -type f -name "*.j2" -exec sed -i 's#{{ ansible_local_dir }}/.local#{{ ansible_user_dir }}/.local#g' {} +
 ```
 
+With fapolicyd enforcing (Option B), expect `sed: can't read …/lightspeed_settings.py.j2: Operation not permitted`, and the same for one community.crypto test file. fapolicyd classifies both as Python. Neither contains the paths being changed, so the messages are harmless.
+
 ### Modify Inventory
 
 Add the following variables to the install inventory
@@ -217,13 +220,13 @@ Skip this if you chose Option A. Run it after "Fix installer path locations" and
 ```
 cd /opt/ansible/<unbundled-installer-directory>
 sudo chown -R root:root collections
-sudo chmod -R go-w collections
+sudo chmod -R u=rwX,go=rX collections
 sudo fapolicyd-cli --file add "$PWD/collections/" --trust-file aap-installer
 sudo fapolicyd-cli --update
 sleep 5; systemctl is-active fapolicyd
 ```
 
-"Skipping symbolic link" messages from `--file add` are expected. Don't skip the `chown`. The STIG leaves fapolicyd's integrity checking off (`integrity = none`), so trust is by path, and root ownership is what stops the trusted files from being changed.
+"Skipping symbolic link" messages from `--file add` are expected. Don't skip the `chown`. The STIG leaves fapolicyd's integrity checking off (`integrity = none`), so trust is by path, and root ownership is what stops the trusted files from being changed. The `chmod` keeps the tree readable, but not writable, by the install user. That matters because a bundle extracted on the hardened host (umask 0077) starts out owner-only, and once root owns it the install user couldn't read it.
 
 Check that the trust took effect:
 
@@ -243,10 +246,10 @@ Ensure the hostname is set
 hostname -f
 ```
 
-Ensure that Ansible Core is installed
+Ensure that Ansible Core and python3-requests are installed (the 2.7 installer needs python3-requests)
 
 ```
-sudo dnf install -y ansible-core
+sudo dnf install -y ansible-core python3-requests
 ```
 
 Optionally install some troubleshooting repositories
