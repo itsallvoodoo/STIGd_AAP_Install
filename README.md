@@ -25,7 +25,7 @@ You need the "Ansible Automation Platform 2.x Containerized Setup Bundle" for an
 
 ## Partitions
 
-I typically allocate a disk with 200GB due to containers and bundled installs in the mix, the extracted containers take up more space. All of these numbers can be increased if you so desire, and you could leave some space unused on a larger drive if you are concerned about changing partition sizes later. Since STIGs forbid the installation of applications in /home directories, you will need to install AAP in the /opt directory. A fresh baseline install of AAP uses ~23GB of space, so if you are concerned and have more storage available, make things bigger:
+I typically allocate a disk with 200GB due to containers and bundled installs in the mix, the extracted containers take up more space. All of these numbers can be increased if you so desire, and you could leave some space unused on a larger drive if you are concerned about changing partition sizes later. Since the STIG requires /home to be mounted noexec (V-257852), you will need to install AAP in the /opt directory. A fresh baseline install of AAP uses ~23GB of space, so if you are concerned and have more storage available, make things bigger:
 
 ```
 /boot            1GB
@@ -45,45 +45,30 @@ Partitions are set up during installation of RHEL.
 
 ## FAPolicy
 
-STIGs should always be applied as early as possible and before AAP is installed. During installation of RHEL 9, you select the security profile and select the DISA STIG for RHEL profile.  For RHEL 10, this option is no longer available during boot. You will have to apply DISA STIG policies after initial boot. Either way, we must configure fapolicy rules (File Access Policy) to allow Ansible to run.
+STIGs should always be applied as early as possible and before AAP is installed. During installation of RHEL 9, you select the security profile and select the DISA STIG for RHEL profile.  For RHEL 10, this option is no longer available during boot. You will have to apply DISA STIG policies after initial boot. Either way, fapolicyd (File Access Policy) will be enforcing, and its default policy blocks the AAP installer.
 
-The rules file needs to be 15-custom.rules inside the /etc/fapolicyd/rules.d/ folder, and includes the following. Copy and paste the below into your "15-custom.rules" file created.
+Why it blocks: the STIG keeps RHEL's stock fapolicyd rules in /etc/fapolicyd/rules.d/ and adds a final `99-deny-everything.rules`. The stock rule that matters is `deny_audit perm=any all : ftype=%languages` (in `70-trusted-lang.rules`). It denies opening any **untrusted** Python (or other script-language) file, whatever program opens it and wherever the file is. The install involves two kinds of untrusted Python:
 
-```
-allow perm=execute uid=<ANSIBLE_USER> : dir=/opt/.ansible
-allow perm=open uid=<ANSIBLE_USER> : dir=/opt/.ansible
-allow perm=any uid=0 : dir=/var/tmp/
-allow perm=any uid=0 trust=1 : all
-allow perm=open exe=/usr/bin/rpm : all
-allow perm=open exe=/usr/bin/<PYTHONBINARYVERSION> comm=dnf : all
-deny_audit perm=any pattern=ld_so : all
-deny_audit perm=any all : ftype=application/x-bad-elf
-allow perm=open all : ftype=application/x-sharedlib trust=1
-deny_audit perm=open all : ftype=application/x-sharedlib
-allow perm=execute all : trust=1
-allow perm=open all : ftype=%languages trust=1
-deny_audit perm=any all : ftype=%languages
-allow perm=any all : ftype=text/x-shellscript
-deny_audit perm=execute all : all
-allow perm=open all : all
-```
+1. **The temporary module files Ansible writes for each task** (`AnsiballZ_*.py`). Pipelining fixes this; see "Modify ansible.cfg" below.
+2. **The installer's own code in the bundle's `collections/` directory.** `ansible-playbook` runs as the install user and has to read these modules and plugins. Pipelining doesn't help with this part.
 
-Be sure to change where it says \<ANSIBLE_USER\> . That needs to be set to the user ID of the account that will be installing AAP. You can determine that 4 digit number by running the command "id user" with whatever user name you are going to use. Below is an example of this:
-```
-[~]$ id alex
-```
-uid=1000(alex) gid=1000(alex) groups=1000(alex),10(wheel)
-1000 is the uid in this example, but on most new systems the ansible user will be 1001.
+Pick one of these two approaches with your ISSM:
 
-Also change the \<PYTHONBINARYVERSION\> to be whichever python executable you have installed. This can sometimes be /usr/bin/python3, but is usually just /usr/bin/python .
-
-Lastly on FAPolicy, if you have custom rules that already exist within your /etc/fapolicyd/rules.d/ folder, you may need to review them to ensure you don't have duplicate lines. The FAPolicy process with merge all rules files into a single combined rules file after you restart the service or the server. Run the following command:
+**Option A: permissive for the install window.** This is what Red Hat documents in the AAP 2.7 hardening guide. Before installing:
 ```
+sudo sed -i 's/^\s*permissive\s*=.*/permissive = 1/' /etc/fapolicyd/fapolicyd.conf
 sudo systemctl restart fapolicyd
+sleep 5; systemctl is-active fapolicyd
 ```
-If you run into an issue during restart, review the /etc/fapolicyd/compiled.rules file to see if there are overlaps or direct conflicts with existing rules.
+Set it back to `permissive = 0` after the install (see Post-Installation).
 
-You can learn more about FA Policy here: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/8/html/security_hardening/assembly_blocking-and-allowing-applications-using-fapolicyd_security-hardening
+**Option B: stay enforcing, and trust the installer's files for the install window.** This adds no fapolicyd rules. The commands are in "fapolicyd: trust the installer (Option B)" under the installation steps below. They have to run after the installer path fixes, because the `sed` step edits the collection files.
+
+Either way, check `systemctl is-active fapolicyd` a few seconds after any fapolicyd restart. A restart can look successful while the daemon exits during startup, and a stopped fapolicyd enforces nothing.
+
+Do **not** write `allow ... uid=<ANSIBLE_USER> : dir=...` rules for a directory the install user can write, such as `/opt/ansible`. Those rules have no `trust=` condition, so the account could then run any binary or script it places in that directory, and fapolicyd would no longer apply to the account that runs AAP.
+
+You can learn more about FA Policy here: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/security_hardening/assembly_blocking-and-allowing-applications-using-fapolicyd_security-hardening
 
 ## User Namespaces
 
@@ -104,14 +89,26 @@ echo "user.max_user_namespaces=15000" | sudo tee /etc/sysctl.d/99-user-namespace
 Note: 15000 is a relatively arbitrary number. After installation and steady state running in production, you can tune this number down to something more reasonable. To find out how many namespaces are in use, you can run the following command as the user that Ansible Automation Platform is running under:
 
 ```
-sudo lsns -t user | wc -l
+lsns -t user -n | wc -l
 ```
+(Run it without `sudo`. With `sudo` it counts every user's namespaces on the system, plus the header line.)
 
 Be sure to give yourself plenty of head room, perhaps double the number shown by that command to accommodate Execution Environments running and multiple users on the system.
 
+## Other STIG settings that affect the install
+
+- **Audit backlog (can crash the host).** The STIG sets `audit_backlog_limit=8192` together with `-f 2`, which panics the kernel when an audit record can't be queued. Rootless Podman unpacking and starting the AAP containers can overflow 8192. In testing, it panicked the kernel during the install. Container startup at boot also queued more than 8192 records. Raise the limit in both places, keep `-f 2`, and reboot (the audit rules are immutable until reboot). The STIG's SCAP rule still passes with 65536:
+  ```
+  sudo grubby --update-kernel=ALL --args=audit_backlog_limit=65536
+  sudo sed -i 's/^\s*-b\s\+8192/-b 65536/' /etc/audit/rules.d/audit.rules
+  ```
+- **AIDE.** The STIG schedules a daily AIDE scan. Scanning rootless container storage adds audit load and reports constant changes. Exclude the container storage and the AAP data directory in `/etc/aide.conf` (use the real paths, which are under /opt/ansible with this layout), then re-initialize the AIDE database after the install.
+- **umask.** The STIG sets 0077. Red Hat's 2.7 docs require 0022 or 0002 for the install; with 077 the controller task container can fail to start. Run the installer from a shell with `umask 0022`.
+- **sudo.** The STIG deletes NOPASSWD sudo rules entirely. Give the install user password-based sudo (for example membership in `wheel`) before hardening, and supply the become password to the installer.
+
 ## Installation Location
 
-IF you are installing in a location other than /home (and you should be to adhere to STIGs), we have to change some hardcoded paths within the installer so it knows to place things. The standard path is /home/<username>, but STIGs do not allow for executable binaries in /home. Follow the instructions in this solution, which uses /opt as an installation location with a username of ansible. If you are using another dedicated user for the installation, use that instead:
+IF you are installing in a location other than /home (and you should be to adhere to STIGs), we have to change some hardcoded paths within the installer so it knows to place things. The standard path is /home/<username>, but the STIG requires /home to be mounted noexec (V-257852), so nothing under /home can be executed. Follow the instructions in this solution, which uses /opt as an installation location with a username of ansible. If you are using another dedicated user for the installation, use that instead:
 
 https://access.redhat.com/solutions/7117294 
 
@@ -173,7 +170,7 @@ cd <unpack_installation_path>/collections
 find ansible_collections -type f -name "*.j2" -exec sed -i 's#{{ ansible_user_dir }}/aap#{{ ansible_base_dir }}/aap#g' {} +
 find ansible_collections -type f -name "*.yml" -exec sed -i 's#{{ ansible_user_dir }}/aap#{{ ansible_base_dir }}/aap#g' {} +
 find ansible_collections -type f -name "*.yml" -exec sed -i 's#{{ ansible_user_dir }}/.local#{{ ansible_local_dir }}/.local#g' {} +
-find ansible_collections -type f -name “*.j2” -exec sed -i 's#{{ ansible_user_dir }}/.local#{{ ansible_local_dir }}/.local#g' {} +
+find ansible_collections -type f -name "*.j2" -exec sed -i 's#{{ ansible_user_dir }}/.local#{{ ansible_local_dir }}/.local#g' {} +
 find ansible_collections -type f -name "*.yml" -exec sed -i 's#{{ ansible_user_dir }}/.config#{{ ansible_config_dir }}/.config#g' {} +
 find ansible_collections -type f -name "*.j2" -exec sed -i 's#{{ ansible_user_dir }}/.config#{{ ansible_config_dir }}/.config#g' {} +
 find ansible_collections -type f -name "*.yml" -exec sed -i 's#{{ ansible_user_dir }}/.gnupg#{{ ansible_config_dir }}/.gnupg#g' {} +
@@ -197,7 +194,7 @@ ansible_local_dir=/opt/ansible
 
 ### Modify ansible.cfg
 
-When Ansible runs normal playbooks and tasks, it deploys a small amount of python code on the end server, which then executes the necessary commands. Since this is compiled essentially at runtime, it cannot be trusted before installation and cannot be baked into FAPolicy. Therefore, we must take advantage of an Ansible feature called pipelining, which will stream the commands via stdin instead of using binaries. Customized the ansible.cfg file in your installer folder with the following settings:
+When Ansible runs normal playbooks and tasks, it deploys a small amount of python code on the end server, which then executes the necessary commands. Since this is compiled essentially at runtime, it cannot be trusted before installation and cannot be baked into FAPolicy. Therefore, we must take advantage of an Ansible feature called pipelining, which will stream the commands via stdin instead of using binaries. Pipelining is required for fapolicyd Option B, and harmless with Option A. It does not cover the installer's own code in `collections/`; that's what the trust step below is for. Customized the ansible.cfg file in your installer folder with the following settings:
 
 ```
 [defaults]
@@ -207,12 +204,36 @@ inventory = ./inventory
 log_path = ./aap_install.log
 remote_tmp = /opt/ansible/tmp
 local_tmp = /opt/ansible/tmp
-allow_world_readable_tmp = True
 
 [connection]
 pipelining = True
 ```
 
+
+### fapolicyd: trust the installer (Option B)
+
+Skip this if you chose Option A. Run it after "Fix installer path locations" and "Modify ansible.cfg", and before the install. Make the installer's collections read-only to the install user, then trust exactly those files:
+
+```
+cd /opt/ansible/<unbundled-installer-directory>
+sudo chown -R root:root collections
+sudo chmod -R go-w collections
+sudo fapolicyd-cli --file add "$PWD/collections/" --trust-file aap-installer
+sudo fapolicyd-cli --update
+sleep 5; systemctl is-active fapolicyd
+```
+
+"Skipping symbolic link" messages from `--file add` are expected. Don't skip the `chown`. The STIG leaves fapolicyd's integrity checking off (`integrity = none`), so trust is by path, and root ownership is what stops the trusted files from being changed.
+
+Check that the trust took effect:
+
+```
+ansible localhost -m debug -a "msg={{ '::1' | ansible.containerized_installer.ipv6_wrap }}"
+```
+
+You should see `"msg": "[::1]"`. If you see `Operation not permitted`, the trust isn't active.
+
+Repeat this (and remove it afterwards) for every installer run: reruns, upgrades (trust the new bundle's `collections/`), backup, restore, and uninstall. They all load the same code.
 
 ### Install
 
@@ -240,6 +261,22 @@ Install AAP 2.x Containerized from /opt/ansible/unbundled-installer-directory/
 ansible-playbook  -i inventory ansible.containerized_installer.install
 ```
 
+On a STIG'd host, also account for these (see "Other STIG settings that affect the install"):
+- Run the installer with `umask 0022`.
+- Provide the become password, either with `--ask-become-pass` or from a protected vars file with `-e @file`.
+- Run it detached (for example with `nohup ... &`). The install takes about an hour, and the STIG stops idle sessions after 10 minutes.
+
 ## Post-Installation
+
+Return fapolicyd to its normal state, then reboot and confirm there are no denials:
+- **Option A:** `sudo sed -i 's/^\s*permissive\s*=.*/permissive = 0/' /etc/fapolicyd/fapolicyd.conf`
+- **Option B:** `sudo fapolicyd-cli --file delete "$PWD/collections/" --trust-file aap-installer && sudo fapolicyd-cli --update`, run from the installer directory.
+
+```
+sudo systemctl reboot
+# after the host is back:
+systemctl is-active fapolicyd
+sudo ausearch -m FANOTIFY -ts boot      # expect no denials; the running platform needs no fapolicyd exception
+```
 
 At this point, you can begin to configure third party authentication, git integration, RBAC, and other features.
